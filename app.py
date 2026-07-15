@@ -1,45 +1,68 @@
 #!/usr/bin/env python3
 # app.py  -  Cyber-Workshop: Passwort-Knacker (Mock-Ziel + Kinder-Werkzeug)
 # Nur gegen dieses selbstgehostete Mock. Start: pip install -r requirements.txt ; python app.py
-import hashlib
 import os
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 GEHEIM = [p.strip() for p in os.environ.get("GEHEIM", "dientzenbach-gymnasium,hi").split(",") if p.strip()]
 
-# Deckelt die Position des Brute-Force-Ziels im Suchraum, damit auch die
-# staerksten Einstellungen innerhalb einer Demo-Session (2000 Client-Versuche)
-# noch auffindbar bleiben, statt endlos zu haengen.
-DEMO_CAP = 1500
+# Feste, thematisch passende Brute-Force-Ziele pro Laenge. Kein Zufall/Hash mehr:
+# laengere/komplexere Ziele erfordern echte, groessere Suchraeume, dadurch
+# korreliert die Knackzeit tatsaechlich mit Laenge und gewaehlten Zeichenarten.
+BASIS_PRO_LAENGE = {
+    2: "dg",
+    3: "dg2",
+    4: "dg26",
+    5: "dg26!",
+    6: "dg2026",
+    7: "dg2026!",
+}
+ACHT_ZEICHEN_ZIEL = "Dg2026!#"
 
 WORTLISTE = ["123456","passwort","password","hallo","qwertz","111111","fussball","schule",
 "sonnenschein","ichliebedich","master","lassmichrein","admin","test","1234","hallo123",
 "berlin","bayern","sommer","winter","engel","schatz","09876","dragon","monkey","letmein",
 "pokemon","minecraft","fortnite","starwars","harrypotter","iloveyou","000000","abc123",
-"Passwort1","qwerty","sommer2024","dientzenbach-gymnasium","hunter2","superman","batman","football"]
+"Passwort1","qwerty","sommer2024","hunter2","superman","batman","football",
+"123456789","12345678","1234567","12345","qwerty123","1q2w3e4r","000000","qwertyuiop",
+"123321","666666","7777777","1qaz2wsx","zaq12wsx","qazwsx","password1","password123",
+"welcome","welcome1","login","freedom","whatever","trustno1","princess","sunshine",
+"shadow","ashley","michael","jennifer","jordan","hunter","killer","hockey","george",
+"charlie","andrew","tigger","robert","thomas","hannah","daniel","joshua","matthew",
+"amanda","samantha","summer","cheese","biteme","dallas","yankees","liverpool",
+"chelsea","arsenal","internet","service","computer","corvette","mercedes","ferrari",
+"jordan23","jasmine","natasha","abcdef","asdfgh","zxcvbn","abcabc","121212",
+"112233","123abc","1a2b3c","q1w2e3","p@ssw0rd","passw0rd","adminadmin","letme1n",
+"iloveyou1","loveyou","forever","friends","family","music","soccer","baseball",
+"basketball","volleyball","gymnasium","klasse10","klasse9","pausenhof","hausaufgaben",
+"ferien2025","ferien2026","sommerferien","schuljahr","klassenfahrt"]
 
 
-def bruteforce_ziel(chars: str, laenge: int) -> str | None:
-    """Deterministisches Brute-Force-Ziel fuer eine (Zeichensatz, Laenge)-Kombination.
+def bruteforce_ziele(laenge: int) -> set[str]:
+    """Menge der akzeptierten Brute-Force-Ziele fuer eine gegebene Laenge.
 
-    Groessere Suchraeume ruecken das Ziel weiter nach hinten (spuerbar mehr
-    Versuche noetig), aber nie weiter als DEMO_CAP - damit jede Einstellung
-    prinzipiell in der Demo-Zeit knackbar bleibt.
+    Fuer Laenge 2-7 alle Gross-/Kleinschreibungs-Varianten der jeweiligen
+    Basis (Ziffern/Sonderzeichen bleiben fix). Laenge 8 hat genau ein
+    vollstaendig spezifiziertes Ziel. Andere Laengen haben kein definiertes
+    Ziel (immer "nicht gefunden").
     """
-    base = len(chars)
-    if base == 0 or laenge <= 0:
-        return None
-    keyspace = base ** laenge
-    span = min(keyspace, DEMO_CAP)
-    digest = hashlib.sha256(f"{chars}:{laenge}:cyberworkshop-dientzenbach".encode()).digest()
-    idx = int.from_bytes(digest, "big") % span
-    digits = [0] * laenge
-    n = idx
-    for p in range(laenge - 1, -1, -1):
-        digits[p] = n % base
-        n //= base
-    return "".join(chars[d] for d in digits)
+    if laenge == 8:
+        return {ACHT_ZEICHEN_ZIEL}
+    basis = BASIS_PRO_LAENGE.get(laenge)
+    if not basis:
+        return set()
+    varianten = {""}
+    for zeichen in basis:
+        neu = set()
+        for prefix in varianten:
+            if zeichen.isalpha():
+                neu.add(prefix + zeichen.lower())
+                neu.add(prefix + zeichen.upper())
+            else:
+                neu.add(prefix + zeichen)
+        varianten = neu
+    return varianten
 
 PAGE_MOCK = """<!doctype html><html lang=de><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>Super-Sichere Bank 3000</title>
@@ -75,6 +98,7 @@ background:transparent;color:var(--ink);border-radius:10px;cursor:pointer;font-w
 .seg button.on{background:var(--gold);color:var(--bg);border-color:var(--gold)}
 #start{width:100%;margin-top:1rem;padding:.9rem;border:none;border-radius:12px;background:var(--mint);
 color:var(--bg);font-weight:800;font-size:1.05rem;cursor:pointer}
+#start:disabled{opacity:.4;cursor:not-allowed}
 .ticker{font-family:'JetBrains Mono',monospace;font-size:2.4rem;font-weight:700;color:var(--gold);
 word-break:break-all;min-height:3rem}.stats{display:flex;gap:1.5rem;flex-wrap:wrap;margin:1rem 0}
 .stat b{font-size:1.5rem;display:block;font-family:'JetBrains Mono',monospace}.stat span{color:var(--lab);font-size:.75rem}
@@ -92,15 +116,17 @@ flex-direction:column;align-items:center;justify-content:center;z-index:9}#win.s
   <div class=lab>Methode</div>
   <div class=seg><button id=m-wl class=on onclick=modus('wortliste')>Wortliste</button>
    <button id=m-bf onclick=modus('bruteforce')>Brute-Force</button></div>
-  <div id=box-wl><div class=lab>Passwortliste</div><textarea id=woerter>%%WOERTER%%</textarea></div>
+  <div id=box-wl><div class=lab>Passwortliste</div>
+   <p style="font-size:.75rem;color:var(--lab);margin:.2rem 0 .5rem">Was wuerde jemand von dieser Schule wohl als Passwort nehmen? Ergaenze eigene Vermutungen unten in der Liste (eine pro Zeile) und druecke Start.</p>
+   <textarea id=woerter>%%WOERTER%%</textarea></div>
   <div id=box-bf style=display:none>
    <div class=lab>Zeichensatz</div>
-   <label><input type=checkbox id=s-klein checked onchange=schaetz()> Kleinbuchstaben a-z</label>
-   <label><input type=checkbox id=s-zahlen onchange=schaetz()> Zahlen 0-9</label>
-   <label><input type=checkbox id=s-gross onchange=schaetz()> Grossbuchstaben A-Z</label>
-   <label><input type=checkbox id=s-sonder onchange=schaetz()> Sonderzeichen !?-_@#</label>
+   <label><input type=checkbox id=s-klein checked onchange="schaetz();pruefeEinstellungen()"> Kleinbuchstaben a-z</label>
+   <label><input type=checkbox id=s-zahlen onchange="schaetz();pruefeEinstellungen()"> Zahlen 0-9</label>
+   <label><input type=checkbox id=s-gross onchange="schaetz();pruefeEinstellungen()"> Grossbuchstaben A-Z</label>
+   <label><input type=checkbox id=s-sonder onchange="schaetz();pruefeEinstellungen()"> Sonderzeichen !?-_@#</label>
    <div class=lab>Laenge: <span id=lval>2</span></div>
-   <input type=range id=laenge min=1 max=8 value=2 oninput="lval.textContent=this.value;schaetz()">
+   <input type=range id=laenge min=1 max=8 value=2 oninput="lval.textContent=this.value;schaetz();pruefeEinstellungen()">
   </div>
   <button id=start onclick=toggle()>Start</button><div id=meld></div>
  </div>
@@ -132,8 +158,13 @@ function zeit(s){if(s<1)return'sofort';const u=[['Jahre',31536000],['Tage',86400
  for(const[nm,v]of u){if(s>=v){const x=s/v;return(nm==='Jahre'&&x>1e6?fmt(x):x.toFixed(x<10?1:0).replace('.',','))+' '+nm;}}return'sofort';}
 function schaetz(){const k=Math.pow(cs().length||1,+$('#laenge').value);
  $('#kombis').textContent=fmt(k);$('#zon').textContent=zeit(k/10);$('#zoff').textContent=zeit(k/1e10);}
+function aktiveKlassen(){let n=0;if($('#s-klein').checked)n++;if($('#s-zahlen').checked)n++;
+ if($('#s-gross').checked)n++;if($('#s-sonder').checked)n++;return n;}
+function pruefeEinstellungen(){const n=aktiveKlassen(),l=+$('#laenge').value;
+ if(n>l){meld('Zu viele Zeichenarten fuer '+l+' Zeichen gewaehlt (max. '+l+').');$('#start').disabled=true;return false;}
+ meld('');$('#start').disabled=false;return true;}
 async function pruefe(pw){versuche++;const bf=$('#m-bf').classList.contains('on');
- const body=bf?{pw,modus:'bruteforce',chars:cs(),laenge:+$('#laenge').value}:{pw,modus:'wortliste'};
+ const body=bf?{pw,modus:'bruteforce',laenge:+$('#laenge').value}:{pw,modus:'wortliste'};
  const r=await fetch('/login',{method:'POST',
  headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return(await r.json()).ok;}
 function* brute(chars,laenge){const a=chars.split('');if(laenge<=0)return;const idx=Array(laenge).fill(0);
@@ -146,7 +177,9 @@ function meld(x){$('#meld').textContent=x||'';}
 async function starte(){laufen=true;versuche=0;t0=performance.now();meld('');$('#win').classList.remove('show');
  $('#start').textContent='Stopp';tick=setInterval(stats,100);
  const bf=$('#m-bf').classList.contains('on');let iter;
- if(bf){const c=cs();if(!c){meld('Bitte einen Zeichensatz waehlen.');stopp();return;}iter=brute(c,+$('#laenge').value);}
+ if(bf){const c=cs();if(!c){meld('Bitte einen Zeichensatz waehlen.');stopp();return;}
+  if(!pruefeEinstellungen()){stopp();return;}
+  iter=brute(c,+$('#laenge').value);}
  else iter=$('#woerter').value.split('\\n').map(w=>w.trim()).filter(Boolean).values();
  let hit=null,stop=false;
  async function worker(){while(laufen&&!hit&&!stop){if(bf&&versuche>=MAX){stop=true;break;}
@@ -157,7 +190,7 @@ async function starte(){laufen=true;versuche=0;t0=performance.now();meld('');$('
  if(hit){$('#winpw').textContent='Passwort: '+hit;$('#win').classList.add('show');}
  else if(laufen)meld(bf&&versuche>=MAX?'Abgebrochen nach '+MAX+' Versuchen - Suchraum zu gross (siehe Anzeige).':'Nicht gefunden.');
  stopp();}
-schaetz();
+schaetz();pruefeEinstellungen();
 </script></html>"""
 
 @app.after_request
@@ -179,13 +212,11 @@ def login():
         body = request.get_json(silent=True) or {}
         pw = str(body.get("pw", ""))
         if body.get("modus") == "bruteforce":
-            chars = str(body.get("chars", ""))
             try:
                 laenge = int(body.get("laenge", 0))
             except (TypeError, ValueError):
                 laenge = 0
-            ziel = bruteforce_ziel(chars, laenge)
-            return jsonify(ok=(ziel is not None and pw == ziel))
+            return jsonify(ok=(pw in bruteforce_ziele(laenge)))
         return jsonify(ok=(pw in GEHEIM))               # Wortliste + Mock-Login
     pw = request.args.get("pw", "")                    # fuer Snap! (Klartext, fixes Ziel "hi")
     return "GEKNACKT" if pw in GEHEIM else "FALSCH"
