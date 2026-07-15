@@ -1,17 +1,45 @@
 #!/usr/bin/env python3
 # app.py  -  Cyber-Workshop: Passwort-Knacker (Mock-Ziel + Kinder-Werkzeug)
 # Nur gegen dieses selbstgehostete Mock. Start: pip install -r requirements.txt ; python app.py
+import hashlib
 import os
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-GEHEIM = [p.strip() for p in os.environ.get("GEHEIM", "Sommer2025!,hi").split(",") if p.strip()]
+GEHEIM = [p.strip() for p in os.environ.get("GEHEIM", "dientzenbach-gymnasium,hi").split(",") if p.strip()]
+
+# Deckelt die Position des Brute-Force-Ziels im Suchraum, damit auch die
+# staerksten Einstellungen innerhalb einer Demo-Session (2000 Client-Versuche)
+# noch auffindbar bleiben, statt endlos zu haengen.
+DEMO_CAP = 1500
 
 WORTLISTE = ["123456","passwort","password","hallo","qwertz","111111","fussball","schule",
 "sonnenschein","ichliebedich","master","lassmichrein","admin","test","1234","hallo123",
 "berlin","bayern","sommer","winter","engel","schatz","09876","dragon","monkey","letmein",
 "pokemon","minecraft","fortnite","starwars","harrypotter","iloveyou","000000","abc123",
-"Passwort1","qwerty","sommer2024","Sommer2025!","hunter2","superman","batman","football"]
+"Passwort1","qwerty","sommer2024","dientzenbach-gymnasium","hunter2","superman","batman","football"]
+
+
+def bruteforce_ziel(chars: str, laenge: int) -> str | None:
+    """Deterministisches Brute-Force-Ziel fuer eine (Zeichensatz, Laenge)-Kombination.
+
+    Groessere Suchraeume ruecken das Ziel weiter nach hinten (spuerbar mehr
+    Versuche noetig), aber nie weiter als DEMO_CAP - damit jede Einstellung
+    prinzipiell in der Demo-Zeit knackbar bleibt.
+    """
+    base = len(chars)
+    if base == 0 or laenge <= 0:
+        return None
+    keyspace = base ** laenge
+    span = min(keyspace, DEMO_CAP)
+    digest = hashlib.sha256(f"{chars}:{laenge}:cyberworkshop-dientzenbach".encode()).digest()
+    idx = int.from_bytes(digest, "big") % span
+    digits = [0] * laenge
+    n = idx
+    for p in range(laenge - 1, -1, -1):
+        digits[p] = n % base
+        n //= base
+    return "".join(chars[d] for d in digits)
 
 PAGE_MOCK = """<!doctype html><html lang=de><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>Super-Sichere Bank 3000</title>
@@ -104,10 +132,12 @@ function zeit(s){if(s<1)return'sofort';const u=[['Jahre',31536000],['Tage',86400
  for(const[nm,v]of u){if(s>=v){const x=s/v;return(nm==='Jahre'&&x>1e6?fmt(x):x.toFixed(x<10?1:0).replace('.',','))+' '+nm;}}return'sofort';}
 function schaetz(){const k=Math.pow(cs().length||1,+$('#laenge').value);
  $('#kombis').textContent=fmt(k);$('#zon').textContent=zeit(k/10);$('#zoff').textContent=zeit(k/1e10);}
-async function pruefe(pw){versuche++;const r=await fetch('/login',{method:'POST',
- headers:{'Content-Type':'application/json'},body:JSON.stringify({pw})});return(await r.json()).ok;}
-function* brute(chars,maxLen){const a=chars.split('');for(let L=1;L<=maxLen;L++){const idx=Array(L).fill(0);
- while(true){yield idx.map(i=>a[i]).join('');let p=L-1;while(p>=0){if(++idx[p]<a.length)break;idx[p]=0;p--;}if(p<0)break;}}}
+async function pruefe(pw){versuche++;const bf=$('#m-bf').classList.contains('on');
+ const body=bf?{pw,modus:'bruteforce',chars:cs(),laenge:+$('#laenge').value}:{pw,modus:'wortliste'};
+ const r=await fetch('/login',{method:'POST',
+ headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return(await r.json()).ok;}
+function* brute(chars,laenge){const a=chars.split('');if(laenge<=0)return;const idx=Array(laenge).fill(0);
+ while(true){yield idx.map(i=>a[i]).join('');let p=laenge-1;while(p>=0){if(++idx[p]<a.length)break;idx[p]=0;p--;}if(p<0)break;}}
 function stats(){const s=(performance.now()-t0)/1000;$('#n').textContent=versuche.toLocaleString('de-DE');
  $('#rate').textContent=s>0?Math.round(versuche/s).toLocaleString('de-DE'):'0';$('#zeitv').textContent=s.toFixed(1).replace('.',',')+' s';}
 function toggle(){laufen?stopp():starte();}
@@ -146,9 +176,18 @@ def hack():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":                       # fuers Web-Tool (JSON)
-        pw = str((request.get_json(silent=True) or {}).get("pw", ""))
-        return jsonify(ok=(pw in GEHEIM))
-    pw = request.args.get("pw", "")                    # fuer Snap! (Klartext)
+        body = request.get_json(silent=True) or {}
+        pw = str(body.get("pw", ""))
+        if body.get("modus") == "bruteforce":
+            chars = str(body.get("chars", ""))
+            try:
+                laenge = int(body.get("laenge", 0))
+            except (TypeError, ValueError):
+                laenge = 0
+            ziel = bruteforce_ziel(chars, laenge)
+            return jsonify(ok=(ziel is not None and pw == ziel))
+        return jsonify(ok=(pw in GEHEIM))               # Wortliste + Mock-Login
+    pw = request.args.get("pw", "")                    # fuer Snap! (Klartext, fixes Ziel "hi")
     return "GEKNACKT" if pw in GEHEIM else "FALSCH"
 
 if __name__ == "__main__":
