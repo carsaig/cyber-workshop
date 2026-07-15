@@ -218,8 +218,17 @@ def login():
                 laenge = 0
             return jsonify(ok=(pw in bruteforce_ziele(laenge)))
         return jsonify(ok=(pw in GEHEIM))               # Wortliste + Mock-Login
-    pw = request.args.get("pw", "")                    # fuer Snap! (Klartext, fixes Ziel "hi")
-    return "GEKNACKT" if pw in GEHEIM else "FALSCH"
+    pw = request.args.get("pw", "")                    # fuer Snap! (Klartext)
+    laenge_param = request.args.get("laenge")
+    if laenge_param is not None:                        # Snap!-Brute-Force: ?pw=..&laenge=N
+        try:
+            laenge = int(laenge_param)
+        except ValueError:
+            laenge = 0
+        ok = pw in bruteforce_ziele(laenge)
+    else:                                                # Snap!-Wortliste: ?pw=.. (kein laenge)
+        ok = pw in GEHEIM
+    return "GEKNACKT" if ok else "FALSCH"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
